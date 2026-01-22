@@ -32,9 +32,9 @@ class OrderMapper
         }
 
         $customer = new Customer();
-        $customer->email     = $email;
+        $customer->email = $email;
         $customer->firstname = $firstname;
-        $customer->lastname  = $lastname;
+        $customer->lastname = $lastname;
 
         $plain = Tools::passwdGen();
         if (method_exists('Tools', 'hash')) {
@@ -45,8 +45,8 @@ class OrderMapper
             $customer->passwd = password_hash($plain, PASSWORD_DEFAULT);
         }
 
-        $customer->id_lang    = (int) Configuration::get('PS_LANG_DEFAULT');
-        $customer->id_shop    = (int) Context::getContext()->shop->id;
+        $customer->id_lang = (int) Configuration::get('PS_LANG_DEFAULT');
+        $customer->id_shop = (int) Context::getContext()->shop->id;
         $customer->newsletter = 0;
 
         $customer->add();
@@ -63,15 +63,15 @@ class OrderMapper
         $zip     = $addrData['zipCode'] ?? ($addrData['zip'] ?? '');
         $country = $addrData['countryCode'] ?? ($addrData['country'] ?? 'PL');
 
-        $address                = new Address();
-        $address->id_customer   = (int) $customer->id;
-        $address->alias         = (string) $alias;
-        $address->firstname     = $addrData['firstName'] ?? $customer->firstname;
-        $address->lastname      = $addrData['lastName']  ?? $customer->lastname;
-        $address->address1      = $street ?: ' ';
-        $address->postcode      = $zip;
-        $address->city          = $addrData['city']  ?? '';
-        $address->phone         = $addrData['phone'] ?? '';
+        $address = new Address();
+        $address->id_customer = (int) $customer->id;
+        $address->alias = (string) $alias;
+        $address->firstname = $addrData['firstName'] ?? $customer->firstname;
+        $address->lastname = $addrData['lastName']  ?? $customer->lastname;
+        $address->address1 = $street ?: ' ';
+        $address->postcode = $zip;
+        $address->city = $addrData['city']  ?? '';
+        $address->phone = $addrData['phone'] ?? '';
 
         $idCountry = Country::getByIso(strtoupper($country));
         if (!$idCountry) {
@@ -137,7 +137,7 @@ class OrderMapper
                         $idAttribute = !empty($row['id_product_attribute']) ? (int) $row['id_product_attribute'] : 0;
                     }
                 } catch (Throwable $e) {
-                    // fallback niżej
+                    
                 }
             }
 

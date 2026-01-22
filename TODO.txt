@@ -3,7 +3,6 @@ TO DO
 
 osobny sync zeby nie wysyłało produktów tylko stany magazynowe 
 dopasowac import zamówien kurierzy  
-Poprawić panel konfigu sidebar złe przyciski 
 
 
 WAZNE 
@@ -55,3 +54,4 @@ Import zamówień z ERLI do PrestaShop
 -tworzy nowe zamówienia w PrestaShop,
 -poprawnie mapuje produkty zamówione jako warianty (np. ps-1-3) i dodaje je do koszyka jako kombinacje,
 -nie tworzy duplikatów zamówień (sprawdza linkowanie w bazie).
+

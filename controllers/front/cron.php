@@ -27,13 +27,15 @@ class ErliintegrationCronModuleFrontController extends ModuleFrontController
         require_once _PS_MODULE_DIR_.'erliintegration/classes/Sync/ProductSync.php';
         require_once _PS_MODULE_DIR_.'erliintegration/classes/Sync/OrderSync.php';
 
-        // 1) wyślij pending produkty
+         // 1) pobierz nowe zamówienia
+        $orderSync = new OrderSync();
+        $orderSync->processInbox();
+
+        // 2) wyślij pending produkty
         $productSync = new ProductSync();
         $syncedProducts = $productSync->syncAllPending(20);
 
-        // 2) pobierz nowe zamówienia
-        $orderSync = new OrderSync();
-        $orderSync->processInbox();
+       
 
         // Prosty output dla CRONa / przeglądarki
         header('Content-Type: text/plain; charset=utf-8');

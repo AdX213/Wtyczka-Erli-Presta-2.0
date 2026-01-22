@@ -201,7 +201,6 @@ class ProductSync
     /* =======================================================================
      *  PRZYGOTOWANIE LINKÓW (SIMPLE + WARIANTY)
      * ===================================================================== */
-
     /**
      * Tworzy rekordy w erli_product_link:
      * - dla produktów bez kombinacji: 1 rekord (id_product_attribute = NULL)
@@ -322,7 +321,6 @@ class ProductSync
                     $this->syncLinkRow($row);
                     $totalProcessed++;
                 } catch (Throwable $e) {
-                    // jeśli w komunikacie jest HTTP 429 – przerwij
                     if (strpos($e->getMessage(), 'HTTP 429') !== false) {
                         $this->logError('product_sync_all_pending', '-', 'Przerwano batch z powodu 429: ' . $e->getMessage());
                         $this->setCursor($lastIdProcessed);

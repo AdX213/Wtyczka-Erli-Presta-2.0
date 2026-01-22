@@ -13,121 +13,238 @@ class OrderSync
 {
     /**
      * Pobiera zdarzenia z ERLI /inbox i tworzy TYLKO nowe zamówienia.
-     * Istniejące zamówienia w Preście są pomijane.
+     * Pobiera WSZYSTKIE paczki (batch'e), nie tylko 100.
+     *
+     * @param int $limit      ile eventów na batch (max 100)
+     * @param int $maxBatches ile batchy maksymalnie (ochrona przed timeoutem)
      */
-    public function processInbox()
+    public function processInbox($limit = 100, $maxBatches = 30)
     {
         $orderApi = new ErliOrderApi();
         $logRepo  = new LogRepository();
         $linkRepo = new OrderLinkRepository();
 
-        // pobieramy max 100 eventów
-        $response = $orderApi->getInbox(100);
+        $limit = (int) $limit;
+        if ($limit < 1) $limit = 1;
+        if ($limit > 100) $limit = 100;
 
-        if (!is_array($response)) {
-            $logRepo->addLog(
-                'order_inbox_error',
-                '',
-                'Błędna odpowiedź getInbox (nie jest tablicą).',
-                print_r($response, true)
-            );
-            return;
-        }
+        $maxBatches = (int) $maxBatches;
+        if ($maxBatches < 1) $maxBatches = 1;
 
-        $code = (int) ($response['code'] ?? 0);
-        if ($code < 200 || $code >= 300) {
-            $logRepo->addLog(
-                'order_inbox_error',
-                '',
-                'Błąd pobierania inbox: HTTP ' . $code,
-                $response['raw'] ?? ''
-            );
-            return;
-        }
+        $stats = [
+            'batches' => 0,
+            'events' => 0,
+            'created' => 0,
+            'ignored' => 0,
+            'exceptions'=> 0,
+            'acked' => 0,
+        ];
 
-        $body = $response['body'] ?? null;
+        $lastBatchWasFull = false;
 
-        // ERLI zwraca tablicę eventów
-        if (!is_array($body) || !$body) {
-            $logRepo->addLog(
-                'order_inbox_empty',
-                '',
-                'Inbox pusty (brak nowych wiadomości).',
-                $response['raw'] ?? ''
-            );
-            return;
-        }
+        for ($batch = 1; $batch <= $maxBatches; $batch++) {
+            $stats['batches']++;
+            // GET INBOX z retry (429)
+            $response = null;
+            $tries = 0;
 
-        $lastMessageId = null;
+            while (true) {
+                $tries++;
+                $response = $orderApi->getInbox($limit);
 
-        foreach ($body as $event) {
-            if (!is_array($event)) {
-                continue;
-            }
-
-            if (isset($event['id'])) {
-                $lastMessageId = $event['id'];
-            }
-
-            $type    = isset($event['type']) ? (string) $event['type'] : '';
-            $payload = isset($event['payload']) && is_array($event['payload'])
-                ? $event['payload']
-                : [];
-
-            try {
-                // ------------------------ NOWE ZAMÓWIENIE ------------------------
-                if (in_array($type, ['orderCreated', 'ORDER_CREATED', 'newOrder'], true)) {
-                    $this->handleOrderCreated($orderApi, $linkRepo, $logRepo, $payload, $event);
-                    continue;
-                }
-
-                // ---------------- ZMIANA STATUSU ZAMÓWIENIA ----------------------
-                if (in_array($type, ['orderStatusChanged', 'orderSellerStatusChanged'], true)) {
-                    $this->handleStatusChanged($orderApi, $linkRepo, $logRepo, $payload, $event, $type);
-                    continue;
-                }
-
-                // inne typy eventów – tylko logujemy
-                $logRepo->addLog(
-                    'order_event_ignored',
-                    '',
-                    'Pominięto event typu: ' . $type,
-                    json_encode($event)
-                );
-            } catch (Throwable $e) {
-                // błąd pojedynczego eventu nie powinien zatrzymywać całości
-                $logRepo->addLog(
-                    'order_event_exception',
-                    '',
-                    'Wyjątek podczas przetwarzania eventu: ' . $e->getMessage(),
-                    json_encode($event)
-                );
-            }
-        }
-
-        // --------------------------- ACK inbox ---------------------------
-        if ($lastMessageId !== null) {
-            $ackResp = $orderApi->ackInbox($lastMessageId);
-            if (is_array($ackResp)) {
-                $ackCode = (int) ($ackResp['code'] ?? 0);
-
-                if ($ackCode < 200 || $ackCode >= 300) {
+                if (!is_array($response)) {
                     $logRepo->addLog(
-                        'order_ack_error',
-                        (string) $lastMessageId,
-                        'Błąd ACK inbox: HTTP ' . $ackCode,
-                        $ackResp['raw'] ?? ''
+                        'order_inbox_error',
+                        '',
+                        'Błędna odpowiedź getInbox (nie jest tablicą).',
+                        print_r($response, true)
+                    );
+                    return $stats;
+                }
+
+                $code = (int) ($response['code'] ?? 0);
+
+                // rate limit
+                if ($code === 429) {
+                    if ($tries >= 5) {
+                        $logRepo->addLog(
+                            'order_inbox_error',
+                            '',
+                            'HTTP 429 z getInbox - przekroczono liczbę retry.',
+                            $response['raw'] ?? ''
+                        );
+                        return $stats;
+                    }
+
+                    sleep(min(2 * $tries, 8));
+                    continue;
+                }
+
+                if ($code < 200 || $code >= 300) {
+                    $logRepo->addLog(
+                        'order_inbox_error',
+                        '',
+                        'Błąd pobierania inbox: HTTP ' . $code,
+                        $response['raw'] ?? ''
+                    );
+                    return $stats;
+                }
+
+                break; // OK
+            }
+
+            $body = $response['body'] ?? null;
+
+            // pusto -> koniec
+            if (!is_array($body) || empty($body)) {
+                if ($batch === 1) {
+                    $logRepo->addLog(
+                        'order_inbox_empty',
+                        '',
+                        'Inbox pusty (brak nowych wiadomości).',
+                        $response['raw'] ?? ''
                     );
                 }
-            } else {
-                $logRepo->addLog(
-                    'order_ack_error',
-                    (string) $lastMessageId,
-                    'Błędna odpowiedź ackInbox (nie jest tablicą).',
-                    print_r($ackResp, true)
-                );
+                return $stats;
             }
+
+            $stats['events'] += count($body);
+            $lastBatchWasFull = (count($body) >= $limit);
+
+            // ID do ACK = MAX z batcha
+            $ackId = null;
+
+            foreach ($body as $event) {
+                if (!is_array($event)) {
+                    continue;
+                }
+
+                // wybieramy największe ID (bezpiecznie)
+                if (isset($event['id'])) {
+                    $id = $event['id'];
+
+                    if ($ackId === null) {
+                        $ackId = $id;
+                    } else {
+                        if (ctype_digit((string)$id) && ctype_digit((string)$ackId)) {
+                            $ackId = ((int)$id > (int)$ackId) ? $id : $ackId;
+                        } else {
+                            // jeśli ID jest stringiem, bierzemy "ostatnie widziane"
+                            $ackId = $id;
+                        }
+                    }
+                }
+
+                $type    = isset($event['type']) ? (string)$event['type'] : '';
+                $payload = (isset($event['payload']) && is_array($event['payload'])) ? $event['payload'] : [];
+
+                try {
+                    // NOWE ZAMÓWIENIE
+                    if (in_array($type, ['orderCreated', 'ORDER_CREATED', 'newOrder'], true)) {
+                        $before = $stats['created'];
+
+                        $this->handleOrderCreated($orderApi, $linkRepo, $logRepo, $payload, $event);
+                        $stats['created'] = $before + 1;
+                        continue;
+                    }
+
+                    // ZMIANA STATUSU (jak nie ma zamówienia, to tworzysz)
+                    if (in_array($type, ['orderStatusChanged', 'orderSellerStatusChanged'], true)) {
+                        $this->handleStatusChanged($orderApi, $linkRepo, $logRepo, $payload, $event, $type);
+                        continue;
+                    }
+
+                    // INNE EVENTY
+                    $stats['ignored']++;
+
+                    $logRepo->addLog(
+                        'order_event_ignored',
+                        '',
+                        'Pominięto event typu: ' . $type,
+                        json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    );
+
+                } catch (Throwable $e) {
+                    $stats['exceptions']++;
+
+                    $logRepo->addLog(
+                        'order_event_exception',
+                        '',
+                        'Wyjątek podczas przetwarzania eventu: ' . $e->getMessage(),
+                        json_encode($event, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+                    );
+                }
+            }
+            // ACK po batchu (z retry 429)
+            if ($ackId !== null) {
+                $triesAck = 0;
+
+                while (true) {
+                    $triesAck++;
+                    $ackResp = $orderApi->ackInbox($ackId);
+
+                    if (!is_array($ackResp)) {
+                        $logRepo->addLog(
+                            'order_ack_error',
+                            (string)$ackId,
+                            'Błędna odpowiedź ackInbox (nie jest tablicą).',
+                            print_r($ackResp, true)
+                        );
+                        return $stats;
+                    }
+
+                    $ackCode = (int) ($ackResp['code'] ?? 0);
+
+                    if ($ackCode === 429) {
+                        if ($triesAck >= 5) {
+                            $logRepo->addLog(
+                                'order_ack_error',
+                                (string)$ackId,
+                                'HTTP 429 z ackInbox - przekroczono liczbę retry.',
+                                $ackResp['raw'] ?? ''
+                            );
+                            return $stats;
+                        }
+
+                        sleep(min(2 * $triesAck, 8));
+                        continue;
+                    }
+
+                    if ($ackCode < 200 || $ackCode >= 300) {
+                        $logRepo->addLog(
+                            'order_ack_error',
+                            (string)$ackId,
+                            'Błąd ACK inbox: HTTP ' . $ackCode,
+                            $ackResp['raw'] ?? ''
+                        );
+                        return $stats;
+                    }
+
+                    $stats['acked']++;
+                    break;
+                }
+            }
+
+            // jeśli przyszło mniej niż limit -> raczej koniec
+            if (count($body) < $limit) {
+                return $stats;
+            }
+
+            // małe opóźnienie, żeby nie walić requestami non-stop
+            usleep(120000);
         }
+
+        // Jeśli dotarliśmy do maxBatches i cały czas było full -> informacja
+        if ($lastBatchWasFull) {
+            $logRepo->addLog(
+                'order_inbox_limit_reached',
+                '',
+                'Osiągnięto maxBatches=' . (int)$maxBatches . ' przy limit=' . (int)$limit . ' (możliwe że są jeszcze eventy).',
+                ''
+            );
+        }
+
+        return $stats;
     }
 
     /* ======================== HANDLERY EVENTÓW ======================== */
@@ -150,7 +267,6 @@ class OrderSync
             return;
         }
 
-        // jeśli zamówienie już istnieje – POMIŃ
         $existing = $linkRepo->findByErliOrderId($erliOrderId);
         if ($existing) {
             $logRepo->addLog(
@@ -229,8 +345,6 @@ class OrderSync
         }
 
         $existing = $linkRepo->findByErliOrderId($erliOrderId);
-
-        // jeśli zamówienie istnieje – nic nie zmieniamy, tylko log
         if ($existing) {
             $logRepo->addLog(
                 'order_status_ignored_existing',
@@ -241,7 +355,6 @@ class OrderSync
             return;
         }
 
-        // jeśli nie istnieje – awaryjnie tworzymy (tak jak w orderCreated)
         $orderResp = $orderApi->getOrder($erliOrderId);
         if (!is_array($orderResp)) {
             $logRepo->addLog(
@@ -290,16 +403,14 @@ class OrderSync
         );
     }
 
-    /* ======================== TWORZENIE ZAMÓWIENIA ======================== */
+  /* ======================== TWORZENIE ZAMÓWIENIA ======================== */
 
     protected function createOrderFromErliData(array $orderData)
     {
         $logRepo = new LogRepository();
         $context = Context::getContext();
-
         // --- Klient ---
         $customer = OrderMapper::getOrCreateCustomer($orderData);
-
         // --- Adresy ---
         $shippingAddrData =
             $orderData['shippingAddress'] ??
@@ -313,7 +424,6 @@ class OrderSync
 
         $deliveryAddress = OrderMapper::createAddress($customer, $shippingAddrData, 'ERLI Delivery');
         $invoiceAddress  = OrderMapper::createAddress($customer, $billingAddrData, 'ERLI Invoice');
-
         // --- Koszyk ---
         $cart = new Cart();
         $cart->id_lang             = (int) Configuration::get('PS_LANG_DEFAULT');
@@ -328,7 +438,6 @@ class OrderSync
         OrderMapper::fillCartWithProducts($cart, $orderData);
 
         /* ---------------------- MAPOWANIE STATUSU Z ERLI ----------------- */
-
         $erliStatus = isset($orderData['status']) ? (string) $orderData['status'] : '';
         $statusNorm = Tools::strtolower($erliStatus);
 
@@ -524,7 +633,7 @@ class OrderSync
                     }
                     $payment->amount = $finalPaid;
                     $payment->update();
-                    break; // zmieniamy pierwszą (jedyną) płatność
+                    break;
                 }
             }
         } catch (Throwable $e) {

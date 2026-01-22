@@ -213,7 +213,6 @@ class ProductMapper
     /**
      * Zwraca listę zdjęć - dla wariantu: zdjęcia przypisane do kombinacji, jeśli istnieją.
      * Zawsze zwraca URL-e absolutne.
-     *
      * Cache-buster stabilny (date_upd), żeby payload się nie zmieniał przy każdym syncu.
      */
     protected static function buildImages(Product $product, int $idLang, ?int $idProductAttribute): array
@@ -240,7 +239,7 @@ class ProductMapper
 
         $imageIds = [];
 
-        // 1) wariant - bierzemy zdjęcia przypisane do kombinacji (najpewniejsza metoda)
+        // 1) wariant - bierzemy zdjęcia przypisane do kombinacji
         //    UWAGA: w zależności od wersji PS, getCombinationImages() potrafi zwrócić tablicę
         //    gdzie klucze NIE są id_image (np. 0,1,2...). Dlatego najpierw lecimy po SQL.
         if ($idProductAttribute !== null && $idProductAttribute > 0) {
@@ -264,7 +263,7 @@ class ProductMapper
                 // ignorujemy i próbujemy fallback niżej
             }
 
-            // fallback 1b) jeśli SQL nic nie zwróciło, próbujemy Product::getCombinationImages()
+            // fallback jeśli SQL nic nie zwróciło, próbujemy Product::getCombinationImages()
             if (empty($imageIds)) {
                 try {
                     $combImages = $product->getCombinationImages($idLang);
@@ -440,7 +439,7 @@ class ProductMapper
             ];
         }
 
-        // sort po indeksie grupy (stabilnie)
+        // sort po indeksie grupy
         usort($tmp, function ($a, $b) use ($groupIndexMap) {
             $ia = (int) $groupIndexMap[$a['gid']]['index'];
             $ib = (int) $groupIndexMap[$b['gid']]['index'];

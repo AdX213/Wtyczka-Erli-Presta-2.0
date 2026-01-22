@@ -10,8 +10,7 @@ class CategoryMapper
 {
     /**
      * Zwraca externalCategories do payloadu ERLI.
-     * TRYB B: wysyłamy już konkretne ID kategorii ERLI (source=marketplace)
-     *
+     * wysyłamy już konkretne ID kategorii ERLI (source=marketplace)
      * @return array
      */
     public static function mapProductCategories(Product $product, $idLang)
@@ -24,7 +23,7 @@ class CategoryMapper
 
         $repo = new CategoryMapRepository();
 
-        // 1) Weź domyślną kategorię produktu jako główną (najbardziej sensowne)
+        // 1) Weź domyślną kategorię produktu jako główną
         $idCategory = (int) $product->id_category_default;
 
         // 2) Jeśli brak domyślnej, weź pierwszą z przypisanych kategorii

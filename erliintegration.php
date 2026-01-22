@@ -10,7 +10,7 @@ class ErliIntegration extends PaymentModule
     {
         $this->name = 'erliintegration';
         $this->tab = 'administration';
-        $this->version = '1.5';
+        $this->version = '2.0';
         $this->author = 'Adrian';
         $this->need_instance = 0;
         $this->bootstrap = true;
@@ -37,7 +37,7 @@ class ErliIntegration extends PaymentModule
 
         if (
             !$this->registerHook('actionProductSave') ||
-            !$this->registerHook('actionUpdateQuantity')||
+            !$this->registerHook('actionUpdateQuantity') ||
             !$this->registerHook('displayBackOfficeHeader')
         ) {
             return false;
@@ -46,7 +46,6 @@ class ErliIntegration extends PaymentModule
         Configuration::updateValue('ERLI_API_KEY', '');
         Configuration::updateValue('ERLI_CRON_TOKEN', Tools::passwdGen(32));
 
-       
         Configuration::updateValue('ERLI_USE_SANDBOX', 0);
 
         Configuration::updateValue('ERLI_DEFAULT_CARRIER', 0);
@@ -173,6 +172,9 @@ class ErliIntegration extends PaymentModule
         return true;
     }
 
+    /**
+     * Standardowa konfiguracja modułu (Moduły -> Konfiguruj)
+     */
     public function getContent()
     {
         $output = '';
@@ -202,10 +204,10 @@ class ErliIntegration extends PaymentModule
         }
 
         if (Tools::isSubmit('submitErliTestConnection')) {
-            $output .= $this->testConnection();
+            $output .= $this->testConnectionHtml();
         }
 
-        $output .= $this->renderForm();
+        $output .= $this->renderForm(); // domyślny AdminModules
 
         $linkToPanel = $this->context->link->getAdminLink('AdminErliIntegration');
 
@@ -233,7 +235,14 @@ class ErliIntegration extends PaymentModule
         return $output;
     }
 
-    public function renderForm()
+    /**
+     * Renderuje formularz konfiguracji.
+     * Poprawka: pozwala wyrenderować formę również w AdminErliIntegrationController
+     * (sidebar ERLI -> Integracja).
+     *
+     * @param array $opts ['controller' => 'AdminModules'|'AdminErliIntegration', 'token'=>..., 'currentIndex'=>...]
+     */
+    public function renderForm(array $opts = [])
     {
         $defaultLang = (int) Configuration::get('PS_LANG_DEFAULT');
 
@@ -351,8 +360,18 @@ class ErliIntegration extends PaymentModule
         $helper = new HelperForm();
         $helper->module                     = $this;
         $helper->name_controller            = $this->name;
-        $helper->token                      = Tools::getAdminTokenLite('AdminModules');
-        $helper->currentIndex               = AdminController::$currentIndex . '&configure=' . $this->name;
+
+        // ważne: token/currentIndex zależnie skąd renderujemy
+        $controller = !empty($opts['controller']) ? (string)$opts['controller'] : 'AdminModules';
+
+        $helper->token = !empty($opts['token'])
+            ? (string)$opts['token']
+            : Tools::getAdminTokenLite($controller);
+
+        $helper->currentIndex = !empty($opts['currentIndex'])
+            ? (string)$opts['currentIndex']
+            : (AdminController::$currentIndex . '&configure=' . $this->name);
+
         $helper->default_form_language      = $defaultLang;
         $helper->allow_employee_form_lang   = $defaultLang;
         $helper->title                      = $this->displayName;
@@ -373,7 +392,10 @@ class ErliIntegration extends PaymentModule
         return $helper->generateForm($fieldsForm);
     }
 
-    protected function testConnection()
+    /**
+     * HTML wynik testu do getContent() (Moduły -> Konfiguruj)
+     */
+    protected function testConnectionHtml()
     {
         try {
             $apiKey = (string) Configuration::get('ERLI_API_KEY');
@@ -401,219 +423,203 @@ class ErliIntegration extends PaymentModule
             return $this->displayError($e->getMessage());
         }
     }
+
     /**
- * INLINE przyciski dla PS9 (Sell).
- * AJAX (bez przekierowań do panelu modułu).
- */
+     * INLINE przyciski dla PS9 (Sell).
+     * AJAX (bez przekierowań do panelu modułu).
+     * js nie działał w views/js 
+     */
     public function hookDisplayBackOfficeHeader($params)
     {
-    $base = $this->context->link->getAdminLink('AdminErliIntegration', true);
+        $base = $this->context->link->getAdminLink('AdminErliIntegration', true);
 
-    // UWAGA: to są endpointy do AJAX (dodamy ajax=1 po stronie JS)
-    $syncAllProductsUrl = $base . '&erli_action=sync_all_products';
-    $syncOneProductBase = $base . '&erli_action=sync_product&id_product=';
-    $importOrdersUrl    = $base . '&erli_action=import_orders';
+        $syncAllProductsUrl = $base . '&erli_action=sync_all_products';
+        $syncOneProductBase = $base . '&erli_action=sync_product&id_product=';
+        $importOrdersUrl    = $base . '&erli_action=import_orders';
 
-    $js = '
-    (function(){
-    try {
-    window.ERLI_SYNC_ALL_PRODUCTS_URL = ' . $this->jsonForJs($syncAllProductsUrl) . ';
-    window.ERLI_SYNC_ONE_PRODUCT_BASE = ' . $this->jsonForJs($syncOneProductBase) . ';
-    window.ERLI_IMPORT_ORDERS_URL     = ' . $this->jsonForJs($importOrdersUrl) . ';
+        $js = '
+        (function(){
+          try {
+            window.ERLI_SYNC_ALL_PRODUCTS_URL = ' . $this->jsonForJs($syncAllProductsUrl) . ';
+            window.ERLI_SYNC_ONE_PRODUCT_BASE = ' . $this->jsonForJs($syncOneProductBase) . ';
+            window.ERLI_IMPORT_ORDERS_URL     = ' . $this->jsonForJs($importOrdersUrl) . ';
 
-    function path(){ return (location.pathname || "").toLowerCase(); }
-    function isProductsPage(){ return path().indexOf("/sell/catalog/products") !== -1; }
-    function isOrdersPage(){ return path().indexOf("/sell/orders") !== -1; }
+            function path(){ return (location.pathname || "").toLowerCase(); }
+            function isProductsPage(){ return path().indexOf("/sell/catalog/products") !== -1; }
+            function isOrdersPage(){ return path().indexOf("/sell/orders") !== -1; }
 
-    if (window.__ERLI_INLINE_BOOT__) return;
-    window.__ERLI_INLINE_BOOT__ = true;
+            if (window.__ERLI_INLINE_BOOT__) return;
+            window.__ERLI_INLINE_BOOT__ = true;
 
-    function ajaxify(url){
-      // dopnij ajax=1 żeby kontroler zwrócił JSON
-      return url + "&ajax=1";
-    }
+            function ajaxify(url){
+              return url + "&ajax=1";
+            }
 
-    function callErli(url, btn){
-      if (btn) {
-        btn.dataset.oldText = btn.textContent || "";
-        btn.textContent = "…";
-        btn.style.pointerEvents = "none";
-        btn.style.opacity = "0.7";
-      }
+            function callErli(url, btn){
+              if (btn) {
+                btn.dataset.oldText = btn.textContent || "";
+                btn.textContent = "…";
+                btn.style.pointerEvents = "none";
+                btn.style.opacity = "0.7";
+              }
 
-      return fetch(ajaxify(url), { credentials: "same-origin" })
-        .then(function(r){ return r.json(); })
-        .then(function(json){
-          alert((json && json.message) ? json.message : "OK");
-          return json;
-        })
-        .catch(function(err){
-          alert("Błąd ERLI (AJAX): " + err);
-          throw err;
-        })
-        .finally(function(){
-          if (btn) {
-            btn.textContent = btn.dataset.oldText || "ERLI";
-            btn.style.pointerEvents = "";
-            btn.style.opacity = "";
+              return fetch(ajaxify(url), { credentials: "same-origin" })
+                .then(function(r){ return r.json(); })
+                .then(function(json){
+                  alert((json && json.message) ? json.message : "OK");
+                  return json;
+                })
+                .catch(function(err){
+                  alert("Błąd ERLI (AJAX): " + err);
+                  throw err;
+                })
+                .finally(function(){
+                  if (btn) {
+                    btn.textContent = btn.dataset.oldText || "ERLI";
+                    btn.style.pointerEvents = "";
+                    btn.style.opacity = "";
+                  }
+                });
+            }
+
+            function injectProductsTopButton(){
+              var addBtn = document.querySelector("a.btn.new-product-button");
+              if (!addBtn) return false;
+
+              if (!document.getElementById("erli-sync-products-btn")) {
+                var erliBtn = document.createElement("a");
+                erliBtn.id = "erli-sync-products-btn";
+                erliBtn.className = "btn btn-outline-primary";
+                erliBtn.style.marginLeft = "8px";
+                erliBtn.textContent = "Wyślij produkty do ERLI";
+                erliBtn.href = "javascript:void(0)";
+                erliBtn.addEventListener("click", function(e){
+                  e.preventDefault();
+                  callErli(window.ERLI_SYNC_ALL_PRODUCTS_URL, erliBtn);
+                });
+                addBtn.parentElement.appendChild(erliBtn);
+              }
+              return true;
+            }
+
+            function injectProductRowButtons(){
+              if (!window.ERLI_SYNC_ONE_PRODUCT_BASE) return;
+
+              var tbody = document.querySelector("table tbody");
+              if (!tbody) return;
+
+              var rows = tbody.querySelectorAll("tr");
+              if (!rows || !rows.length) return;
+
+              rows.forEach(function(tr){
+                if (tr.querySelector(".erli-row-btn")) return;
+
+                var idProduct = null;
+
+                var cb = tr.querySelector("input[type=\\"checkbox\\"][value]");
+                if (cb && cb.value && /^\\d+$/.test(cb.value)) {
+                  idProduct = cb.value;
+                }
+
+                if (!idProduct) {
+                  var firstTd = tr.querySelector("td");
+                  if (firstTd) {
+                    var t = (firstTd.textContent || "").trim();
+                    if (/^\\d+$/.test(t)) idProduct = t;
+                  }
+                }
+
+                if (!idProduct) return;
+
+                var tds = tr.querySelectorAll("td");
+                if (!tds || !tds.length) return;
+
+                var actionsTd = tds[tds.length - 1];
+                if (!actionsTd) return;
+
+                var a = document.createElement("a");
+                a.className = "btn btn-sm btn-outline-secondary erli-row-btn";
+                a.textContent = "ERLI";
+                a.title = "Wyślij produkt do ERLI";
+                a.style.marginRight = "6px";
+                a.href = "javascript:void(0)";
+                a.addEventListener("click", function(e){
+                  e.preventDefault();
+                  callErli(window.ERLI_SYNC_ONE_PRODUCT_BASE + encodeURIComponent(String(idProduct)), a);
+                });
+
+                actionsTd.insertBefore(a, actionsTd.firstChild);
+              });
+            }
+
+            function injectOrdersTopButton(){
+              if (!window.ERLI_IMPORT_ORDERS_URL) return false;
+              if (document.getElementById("erli-import-orders-btn")) return true;
+
+              var addOrderBtn = null;
+              var links = document.querySelectorAll("a.btn,button.btn");
+
+              for (var i=0; i<links.length; i++){
+                var t = (links[i].getAttribute("title") || "").trim();
+                var txt = (links[i].textContent || "").trim();
+                if (t === "Dodaj nowe zamówienie" || txt === "Dodaj nowe zamówienie") {
+                  addOrderBtn = links[i];
+                  break;
+                }
+              }
+
+              if (!addOrderBtn) return false;
+              if (!addOrderBtn.parentElement) return false;
+
+              var btn = document.createElement("a");
+              btn.id = "erli-import-orders-btn";
+              btn.className = "btn btn-outline-primary";
+              btn.style.marginLeft = "8px";
+              btn.textContent = "Pobierz zamówienia z ERLI";
+              btn.href = "javascript:void(0)";
+              btn.addEventListener("click", function(e){
+                e.preventDefault();
+                callErli(window.ERLI_IMPORT_ORDERS_URL, btn);
+              });
+
+              addOrderBtn.parentElement.insertBefore(btn, addOrderBtn.nextSibling);
+              return true;
+            }
+
+            function tick(){
+              if (isProductsPage()) {
+                injectProductsTopButton();
+                injectProductRowButtons();
+              } else if (isOrdersPage()) {
+                injectOrdersTopButton();
+              }
+            }
+
+            if (document.readyState === "loading") {
+              document.addEventListener("DOMContentLoaded", tick);
+            } else {
+              tick();
+            }
+
+            var mo = new MutationObserver(tick);
+            mo.observe(document.body, { childList:true, subtree:true });
+
+          } catch(e) {
+            console && console.warn && console.warn("[ERLI] inline error", e);
           }
-        });
+        })();
+        ';
+
+        $css = '.erli-row-btn{min-width:52px;}';
+
+        return '<style>' . $css . '</style><script>' . $js . '</script>';
     }
-
-    // ===== PRODUCTS: top button =====
-    function injectProductsTopButton(){
-      var addBtn = document.querySelector("a.btn.new-product-button");
-      if (!addBtn) return false;
-
-      if (!document.getElementById("erli-sync-products-btn")) {
-        var erliBtn = document.createElement("a");
-        erliBtn.id = "erli-sync-products-btn";
-        erliBtn.className = "btn btn-outline-primary";
-        erliBtn.style.marginLeft = "8px";
-        erliBtn.textContent = "Wyślij produkty do ERLI";
-        erliBtn.href = "javascript:void(0)";
-        erliBtn.addEventListener("click", function(e){
-          e.preventDefault();
-          callErli(window.ERLI_SYNC_ALL_PRODUCTS_URL, erliBtn);
-        });
-        addBtn.parentElement.appendChild(erliBtn);
-      }
-      return true;
-    }
-
-    // ===== PRODUCTS: row buttons (Akcje) =====
-    function injectProductRowButtons(){
-      if (!window.ERLI_SYNC_ONE_PRODUCT_BASE) return;
-
-      var tbody = document.querySelector("table tbody");
-      if (!tbody) return;
-
-      var rows = tbody.querySelectorAll("tr");
-      if (!rows || !rows.length) return;
-
-      rows.forEach(function(tr){
-        if (tr.querySelector(".erli-row-btn")) return;
-
-        var idProduct = null;
-
-        var cb = tr.querySelector("input[type=\\"checkbox\\"][value]");
-        if (cb && cb.value && /^\\d+$/.test(cb.value)) {
-          idProduct = cb.value;
-        }
-
-        if (!idProduct) {
-          var firstTd = tr.querySelector("td");
-          if (firstTd) {
-            var t = (firstTd.textContent || "").trim();
-            if (/^\\d+$/.test(t)) idProduct = t;
-          }
-        }
-
-        if (!idProduct) return;
-
-        var tds = tr.querySelectorAll("td");
-        if (!tds || !tds.length) return;
-
-        var actionsTd = tds[tds.length - 1];
-        if (!actionsTd) return;
-
-        var a = document.createElement("a");
-        a.className = "btn btn-sm btn-outline-secondary erli-row-btn";
-        a.textContent = "ERLI";
-        a.title = "Wyślij produkt do ERLI";
-        a.style.marginRight = "6px";
-        a.href = "javascript:void(0)";
-        a.addEventListener("click", function(e){
-          e.preventDefault();
-          callErli(window.ERLI_SYNC_ONE_PRODUCT_BASE + encodeURIComponent(String(idProduct)), a);
-        });
-
-        actionsTd.insertBefore(a, actionsTd.firstChild);
-      });
-    }
-
-    // ===== ORDERS: top button obok "Dodaj nowe zamówienie" =====
-    function injectOrdersTopButton(){
-      if (!window.ERLI_IMPORT_ORDERS_URL) return false;
-      if (document.getElementById("erli-import-orders-btn")) return true;
-
-      var addOrderBtn = null;
-      var links = document.querySelectorAll("a.btn,button.btn");
-
-      for (var i=0; i<links.length; i++){
-        var t = (links[i].getAttribute("title") || "").trim();
-        var txt = (links[i].textContent || "").trim();
-        if (t === "Dodaj nowe zamówienie" || txt === "Dodaj nowe zamówienie") {
-          addOrderBtn = links[i];
-          break;
-        }
-      }
-
-      if (!addOrderBtn) {
-        for (var j=0; j<links.length; j++){
-          var r = links[j].getBoundingClientRect();
-          if (r.top >= 60 && r.top <= 160 && r.left > window.innerWidth * 0.55) {
-            addOrderBtn = links[j];
-            break;
-          }
-        }
-      }
-
-      if (!addOrderBtn || !addOrderBtn.parentElement) return false;
-
-      var btn = document.createElement("a");
-      btn.id = "erli-import-orders-btn";
-      btn.className = "btn btn-outline-primary";
-      btn.style.marginLeft = "8px";
-      btn.textContent = "Pobierz zamówienia z ERLI";
-      btn.href = "javascript:void(0)";
-      btn.addEventListener("click", function(e){
-        e.preventDefault();
-        callErli(window.ERLI_IMPORT_ORDERS_URL, btn);
-      });
-
-      addOrderBtn.parentElement.insertBefore(btn, addOrderBtn.nextSibling);
-      return true;
-    }
-
-    function tick(){
-      if (isProductsPage()) {
-        injectProductsTopButton();
-        injectProductRowButtons();
-      } else if (isOrdersPage()) {
-        injectOrdersTopButton();
-      }
-    }
-
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", tick);
-    } else {
-      tick();
-    }
-
-    var mo = new MutationObserver(tick);
-    mo.observe(document.body, { childList:true, subtree:true });
-
-  } catch(e) {
-    console && console.warn && console.warn("[ERLI] inline error", e);
-  }
-    })();
-    ';
-
-    $css = '.erli-row-btn{min-width:52px;}';
-
-    return '<style>' . $css . '</style><script>' . $js . '</script>';
-}
-
 
     private function jsonForJs($value)
     {
         return json_encode((string)$value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     }
 
-    /**
-     * Hook: produkt zapisany -> oznacz jako "do sync"
-     */
     public function hookActionProductSave($params)
     {
         if (empty($params['id_product'])) {
@@ -627,13 +633,9 @@ class ErliIntegration extends PaymentModule
 
         $idProduct = (int) $params['id_product'];
 
-        // oznacz produkt jako pending w erli_product_link
         $this->markProductPending($idProduct, null);
     }
 
-    /**
-     * Hook: zmiana stanu -> oznacz jako "do sync"
-     */
     public function hookActionUpdateQuantity($params)
     {
         if (empty($params['id_product'])) {
@@ -651,19 +653,33 @@ class ErliIntegration extends PaymentModule
         $this->markProductPending($idProduct, $idAttr);
     }
 
-    /**
-     * Wpis/aktualizacja w erli_product_link tak, aby ProductSync później wysłał.
-     */
     private function markProductPending($idProduct, $idProductAttribute = null)
     {
         $idProduct = (int) $idProduct;
-        $idAttr = $idProductAttribute !== null ? (int)$idProductAttribute : null;
 
-        // external_id - na start ustawiamy jako id produktu (możesz to zmienić jeśli masz inne mapowanie)
-        $externalId = (string) $idProduct;
+        // jeśli produkt ma kombinacje i nie mamy id attr -> oznacz wszystkie warianty
+        if ($idProductAttribute === null) {
+            $combRows = Product::getProductAttributesIds($idProduct);
+            if (!empty($combRows) && is_array($combRows)) {
+                foreach ($combRows as $r) {
+                    $idPa = (int) ($r['id_product_attribute'] ?? 0);
+                    if ($idPa > 0) {
+                        $this->markProductPending($idProduct, $idPa);
+                    }
+                }
+                return;
+            }
+        }
+
+        $idAttr = ($idProductAttribute !== null) ? (int)$idProductAttribute : null;
+
+        // poprawny external_id jak w ProductSync
+        $externalId = ($idAttr !== null && $idAttr > 0)
+            ? 'ps-' . $idProduct . '-' . $idAttr
+            : 'ps-' . $idProduct;
 
         $where = 'id_product=' . (int)$idProduct;
-        if ($idAttr !== null) {
+        if ($idAttr !== null && $idAttr > 0) {
             $where .= ' AND id_product_attribute=' . (int)$idAttr;
         } else {
             $where .= ' AND (id_product_attribute IS NULL OR id_product_attribute=0)';
@@ -680,11 +696,7 @@ class ErliIntegration extends PaymentModule
             'last_error' => null,
         ];
 
-        if ($idAttr !== null) {
-            $data['id_product_attribute'] = (int)$idAttr;
-        } else {
-            $data['id_product_attribute'] = null;
-        }
+        $data['id_product_attribute'] = ($idAttr !== null && $idAttr > 0) ? (int)$idAttr : null;
 
         if ($exists) {
             Db::getInstance()->update('erli_product_link', $data, 'id_erli_product_link='.(int)$exists);

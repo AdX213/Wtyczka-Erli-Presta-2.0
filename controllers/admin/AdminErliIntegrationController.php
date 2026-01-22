@@ -25,6 +25,7 @@ class AdminErliIntegrationController extends ModuleAdminController
             'output' => '',
         ]);
 
+        // Linki nawigacyjne + AJAX dla mapping.tpl
         $this->assignNavigationLinks();
 
         // POST z panelu modułu (zapis mapowania / itp.)
@@ -143,14 +144,11 @@ class AdminErliIntegrationController extends ModuleAdminController
                 }
 
                 $where = [];
-
                 if ($onlyLeaf) {
                     $where[] = 'leaf = 1';
                 }
 
                 $like = '%' . pSQL($q) . '%';
-
-                // breadcrumb_json jest tekstem "A > B > C"
                 $where[] = '(name LIKE "' . $like . '" OR breadcrumb_json LIKE "' . $like . '")';
 
                 $sql = '
@@ -195,7 +193,6 @@ class AdminErliIntegrationController extends ModuleAdminController
     {
         $token = Tools::getAdminTokenLite('AdminErliIntegration');
         $base  = 'index.php?controller=AdminErliIntegration&token=' . $token;
-
         $ajaxBase = $base . '&ajax=1';
 
         $this->context->smarty->assign([
@@ -206,7 +203,7 @@ class AdminErliIntegrationController extends ModuleAdminController
             'link_configure' => $base . '&view=configure',
             'link_mapping'   => $base . '&view=mapping',
 
-            // mapping.tpl będzie używać tych endpointów:
+            // mapping.tpl używa tych endpointów:
             'link_ajax_fetch_erli_categories'  => $ajaxBase . '&erli_action=fetch_erli_categories',
             'link_ajax_search_erli_categories' => $ajaxBase . '&erli_action=search_erli_categories',
         ]);
@@ -230,6 +227,7 @@ class AdminErliIntegrationController extends ModuleAdminController
 
     private function handlePostActionsAndRedirect()
     {
+        // flash
         $flash = (string) $this->context->cookie->__get('erli_flash');
         if ($flash !== '') {
             $this->context->smarty->assign(['output' => $flash]);
@@ -263,6 +261,11 @@ class AdminErliIntegrationController extends ModuleAdminController
         );
     }
 
+    /**
+     * ZAPIS MAPOWANIA:
+     * - zapis do ps_erli_category_map
+     * - działa niezależnie od tego czy masz UNIQUE na id_category (robimy update/insert)
+     */
     private function saveCategoryMapping()
     {
         $data = Tools::getValue('category');
@@ -279,21 +282,38 @@ class AdminErliIntegrationController extends ModuleAdminController
             $erliId   = trim((string) ($row['erli_category_id'] ?? ''));
             $erliName = trim((string) ($row['erli_category_name'] ?? ''));
 
-            // Bez ID ERLI nie zapisujemy mapowania (usuń jeśli było)
+            // Bez ID ERLI: usuń mapowanie (jeśli istnieje)
             if ($erliId === '') {
                 Db::getInstance()->delete('erli_category_map', 'id_category=' . (int)$idCategory);
                 continue;
             }
 
-            $sql = 'INSERT INTO `' . _DB_PREFIX_ . 'erli_category_map`
-                        (`id_category`, `erli_category_id`, `erli_category_name`)
-                    VALUES
-                        (' . (int)$idCategory . ', "' . pSQL($erliId) . '", "' . pSQL($erliName) . '")
-                    ON DUPLICATE KEY UPDATE
-                        `erli_category_id`=VALUES(`erli_category_id`),
-                        `erli_category_name`=VALUES(`erli_category_name`)';
+            // Sprawdź czy rekord istnieje
+            $exists = (int) Db::getInstance()->getValue(
+                'SELECT COUNT(*) FROM `' . _DB_PREFIX_ . 'erli_category_map` WHERE id_category=' . (int)$idCategory
+            );
 
-            Db::getInstance()->execute($sql);
+            if ($exists > 0) {
+                // UPDATE
+                Db::getInstance()->update(
+                    'erli_category_map',
+                    [
+                        'erli_category_id' => pSQL($erliId),
+                        'erli_category_name' => pSQL($erliName),
+                    ],
+                    'id_category=' . (int)$idCategory
+                );
+            } else {
+                // INSERT
+                Db::getInstance()->insert(
+                    'erli_category_map',
+                    [
+                        'id_category' => (int)$idCategory,
+                        'erli_category_id' => pSQL($erliId),
+                        'erli_category_name' => pSQL($erliName),
+                    ]
+                );
+            }
         }
     }
 
@@ -510,6 +530,12 @@ class AdminErliIntegrationController extends ModuleAdminController
         ]);
     }
 
+    /**
+     * RENDER MAPOWANIA:
+     * - ładuje wszystkie kategorie Prestashop (id_category > 1)
+     * - dołącza zapisane mapowania z ps_erli_category_map
+     * - buduje category_rows dla mapping.tpl
+     */
     protected function renderMapping()
     {
         $idLang = (int) $this->context->language->id;
@@ -540,6 +566,7 @@ class AdminErliIntegrationController extends ModuleAdminController
         $rows = [];
         foreach ($categories ?: [] as $c) {
             $idCategory = (int)$c['id_category'];
+
             $rows[] = [
                 'id_category' => $idCategory,
                 'category_name' => (string)$c['name'],
